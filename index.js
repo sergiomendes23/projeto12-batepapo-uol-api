@@ -1,27 +1,41 @@
 import express from 'express';
 import cors from 'cors';
 import dayjs from 'dayjs';
+import { MongoClient } from "mongodb";
+import dotenv from "dotenv";
+import joi from 'joi';
 
 const server = express();
 server.use(cors());
 server.use(express.json());
+dotenv.config();
 
-const participantes = [{name: 'João'}, {name: 'maria'}];
-const formatoHora = dayjs().format('hh:mm:ss');
-const messages = [
-    {from: 'maria', 
-    to: 'Todos', 
-    text: 'entra na sala...', 
-    type: 'status', 
-    time: 'HH:MM:SS'}
-];
+const mongoClient = new MongoClient(process.env.MONGO_URI);
+
+let db;
+
+mongoClient.connect().then(() => {
+    db = mongoClient.db('batepapo-uol');
+})
+
+const userSchema = joi.object({
+    name: joi.string().required(),
+})
+
+const messageSchema = joi.object({
+    to: joi.string().required(),
+    text: joi.string().required(),
+    type: joi.string().valid('message', 'private_message')
+
+})
 
 
-server.post('/participants', function (req, res) {
+server.post('/participants', async function (req, res) {
     const {name}  = req.body;
-    const participantesNovos = participantes.find((participante) => participante.name === name);
+    const validacao = userSchema.validate(req.body)
+    const participantesNovos = await db.collection('participantes').findOne({name});
 
-    if( name === '') {
+    if(validacao.error) {
         res.status(422).send('O nome de usuário não pode estar vazio');
         return;
     }
@@ -33,27 +47,39 @@ server.post('/participants', function (req, res) {
         return;
     }
 
-    participantes.push({
-        name,
-        formatoHora: Date.now()
-    });
-    res.sendStatus(201);    
-})
-
-server.get('/participants', function (req, res) {
-    res.send(participantes)
-})
-
-server.post('/messages', function (req, res) {
-    const { to, text, type } = req.body
-    const { user: from } = req.headers
-
-    if(to === "" || text === ""){
-        res.status(422).send('O nome de usuário não pode estar vazio');
+    try{
+        await db.collection('messages').insertOne({
+            from: name,
+            to: 'Todos',
+            text: 'entra na sala...', 
+            type: 'status', 
+            time: dayjs(Date.now()).format('hh:mm:ss')
+        
+        })
+        await db.collection('participantes').insertOne({
+            name,
+            lastStatus: Date.now()
+        })
+        return res.sendStatus(201);    
+    }catch(error){
+        return res.sendStatus(400);
     }
-    if(type !== 'message' && type !== "private_message"){
-        res.sendStatus(422)
-        return;
+})
+
+server.get('/participants', async function (req, res) {
+    const usuarios = await db.collection('participantes').find().toArray();
+    
+    res.send(usuarios);
+})
+
+server.post('/messages', async function (req, res) {
+    const { to, text, type } = req.body;
+    const { user: from } = req.headers;
+    const usuarioAtivo = await db.collection('participantes').findOne({name: from})
+    const validacao = messageSchema.validate({ to, text, type });
+
+    if(!usuarioAtivo || validacao.error){
+        res.status(422).send('O nome de usuário não pode estar vazio');
     }
 
     const mensagem = {
@@ -61,19 +87,31 @@ server.post('/messages', function (req, res) {
         text,
         type,
         from,
-        formatoHora
+        time: dayjs(Date.now()).format('hh:mm:ss')
     }
-    res.send(mensagem)
+    await db.collection('messages').insertOne(mensagem)
+    return res.sendStatus(201);
 })
 
-server.get('/messages', function (req, res) {
+server.get('/messages', async function (req, res) {
+    const mensagens = await db.collection('messages').find().toArray();
     const {limit} = req.query;
-    let ultimasMenssagens = messages;
+    const {user} = req.headers;
+    let ultimasMensagens = mensagens
+        ultimasMensagens = ultimasMensagens.filter((value) => {
+        return(
+            value.type === 'status' ||
+            value.type === 'message' ||
+            (value.type === 'private_message' &&
+            (value.to === user || value.from === user))
+        )
+    })
+
 
     if(limit) {
-        ultimasMenssagens = messages.slice(-limit);
+        ultimasMensagens = ultimasMensagens.slice(-limit);
     }
-    res.send(ultimasMenssagens);
+    res.send(ultimasMensagens);
 })
 
 server.listen(5000);
