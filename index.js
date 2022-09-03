@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import dayjs from 'dayjs';
-import { MongoClient } from "mongodb";
+import { MongoClient, ObjectId } from "mongodb";
 import dotenv from "dotenv";
 import joi from 'joi';
 
@@ -29,6 +29,28 @@ const messageSchema = joi.object({
 
 })
 
+async function removerParticipante() {
+    try{
+        const listaUsuraio = await db.collection('participantes').find().toArray();
+        const kickParticipantes = listaUsuraio.filter(
+            (value) => Date.now() - Number(value.lastStatus) > 10000
+        );
+
+        if(kickParticipantes){
+            kickParticipantes.forEach(value => {
+                db.collection('participantes').deleteOne({_id:ObjectId(value._id)})
+                db.collection('messages').insertOne({
+                    from: value.name, 
+                    to: 'Todos', 
+                    text: 'sai da sala...', 
+                    type: 'status', 
+                    time: dayjs(Date.now()).format('hh:mm:ss')
+                })
+            })
+        }
+    }catch(error){}
+}
+setInterval(removerParticipante, 15000);
 
 server.post('/participants', async function (req, res) {
     const {name}  = req.body;
@@ -113,5 +135,29 @@ server.get('/messages', async function (req, res) {
     }
     res.send(ultimasMensagens);
 })
+
+server.post('/status', async function (req, res) {
+    const {user} = req.headers;
+
+    try{
+        const participanteAtivo = await db.collection('participantes').findOne({name: user});
+    
+        if(!participanteAtivo ) {
+            return res.sendStatus(400);
+        }
+    
+        const ultimoStatus = Date.now()
+        
+        await db
+            .collection('participantes')
+            .updateOne({ name: user}, {$set: { lastStatus: ultimoStatus }})
+            console.log(participanteAtivo)
+            return res.sendStatus(200);
+            
+    } catch(error){
+        return res.sendStatus(400);
+    }
+});
+
 
 server.listen(5000);
