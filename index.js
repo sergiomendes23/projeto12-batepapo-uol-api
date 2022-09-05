@@ -151,7 +151,6 @@ server.post('/status', async function (req, res) {
         await db
             .collection('participantes')
             .updateOne({ name: user}, {$set: { lastStatus: ultimoStatus }})
-            console.log(participanteAtivo)
             return res.sendStatus(200);
             
     } catch(error){
